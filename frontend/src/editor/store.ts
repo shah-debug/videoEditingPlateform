@@ -50,7 +50,7 @@ interface EditorState {
   setWordColor: (segId: string, wordIndex: number, color: string | null) => void
   setStyle: (patch: Partial<CaptionStyle>, key?: string) => void
   clearSegmentStyle: (id: string) => void
-  applyPreset: (style: Partial<CaptionStyle>) => void
+  applyPreset: (style: Partial<CaptionStyle>, presetId?: string) => void
   setSettings: (patch: Partial<Settings>, key?: string) => void
 }
 
@@ -226,7 +226,9 @@ export const useEditor = create<EditorState>((set, get) => ({
     }
   },
   clearSegmentStyle: (id) => get().commit((d) => ({ ...d, segments: d.segments.map((x) => (x.id === id ? { ...x, style: null } : x)) })),
-  applyPreset: (style) => get().commit((d) => ({ ...d, style: { ...d.style, ...style } })),
+  applyPreset: (style, presetId) => get().commit((d) => ({
+    ...d, style: { ...d.style, ...style }, settings: { ...d.settings, presetId: presetId ?? null },
+  })),
   setSettings: (patch, key) => get().commit((d) => ({ ...d, settings: { ...d.settings, ...patch } }), key),
 }))
 

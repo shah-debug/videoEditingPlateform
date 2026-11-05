@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { BookA, Copy, Languages, Merge, Plus, RefreshCw, Scissors, Search, Sparkles, Trash2, Wand2 } from 'lucide-react'
+import { BookA, ClipboardPaste, Copy, Languages, Merge, Plus, RefreshCw, Scissors, Search, Sparkles, Trash2, Wand2 } from 'lucide-react'
 import { player, useEditor, useTime } from '../editor/store'
 import { api, formatTime, parseTime } from '../services/api'
 import { Button, Select, cx, toast } from '../components/ui'
 import { GenerateDialog } from './GenerateDialog'
+import { TranscriptDialog } from './TranscriptDialog'
 import { DictionaryDialog } from './DictionaryDialog'
 import { MediaCard } from './MediaCard'
 import type { Segment, TranscriptionOptions } from '../types'
@@ -22,6 +23,7 @@ export function SubtitlePanel() {
   const [opts, setOpts] = useState<TranscriptionOptions | null>(null)
   const [q, setQ] = useState('')
   const [genOpen, setGenOpen] = useState(false)
+  const [pasteOpen, setPasteOpen] = useState(false)
   const [dictOpen, setDictOpen] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -81,6 +83,11 @@ export function SubtitlePanel() {
           onClick={() => setGenOpen(true)}>
           {segments.length ? <><RefreshCw size={15} /> Regenerate captions</> : <><Sparkles size={15} /> Auto generate captions</>}
         </Button>
+        <Button variant="subtle" className="w-full" disabled={!video || video.status !== 'ready' || !!transcribing}
+          title="Paste your own transcript (Roman Urdu, Urdu, English…) and sync it to the speech"
+          onClick={() => setPasteOpen(true)}>
+          <ClipboardPaste size={15} /> Use my own transcript
+        </Button>
         {transcribing && <div className="text-[11px] text-accent-300 text-center">{transcribing.stage}… {Math.round(transcribing.progress * 100)}%</div>}
         {hasUrduSource && (
           <div className="flex gap-1.5">
@@ -108,12 +115,13 @@ export function SubtitlePanel() {
       <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto px-2 pb-4 space-y-1">
         {!segments.length && (
           <div className="text-center text-xs text-ink-500 px-6 py-10 leading-relaxed">
-            {video ? 'No captions yet. Click “Auto generate captions”, or add captions manually with +.' : 'Upload a video to get started.'}
+            {video ? 'No captions yet. Click “Auto generate captions”, paste your own transcript with “Use my own transcript”, or add captions manually with +.' : 'Upload a video to get started.'}
           </div>
         )}
         {filtered.map((s) => <CaptionItem key={s.id} seg={s} selected={s.id === selectedId} query={q} />)}
       </div>
       {genOpen && opts && <GenerateDialog opts={opts} onClose={() => setGenOpen(false)} />}
+      {pasteOpen && opts && <TranscriptDialog opts={opts} onClose={() => setPasteOpen(false)} />}
       {dictOpen && <DictionaryDialog onClose={() => setDictOpen(false)} />}
     </div>
   )

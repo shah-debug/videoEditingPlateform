@@ -51,14 +51,15 @@ Configuration is optional: copy `.env.example` to `.env`.
 | Upload | Drag & drop / file picker, MP4 · MOV · AVI · MKV · WEBM. Streaming upload (the browser never loads the file into memory; the server writes chunks to disk). Instant local preview while uploading. Replace / remove video. Metadata: duration, resolution, fps, size, container and codecs. |
 | Processing | FFprobe metadata + validation (corrupt/unsupported files get a clear message), 16 kHz audio extraction, waveform, automatic H.264 preview proxy for formats browsers can't play (HEVC, AVI, 10-bit…), automatic language detection. |
 | AI captions | Faster-Whisper with Silero VAD, word-level timestamps, auto/manual language, model choice (tiny → large-v3), caption length (short/social, medium, long). Separate *spoken language* and *caption output*: **Original**, **Roman Urdu**, **Urdu script**, **English translation**. |
+| Your own transcript | **Use my own transcript**: paste (or open a .txt/.srt/.vtt) the exact words in Roman Urdu, Urdu script or any language. The app finds when each word is spoken and builds the captions, either fitted to the screen automatically or one caption per line you typed. Your spelling is kept exactly. Works even where the speech model mishears words. |
 | Roman Urdu | Urdu is transcribed in Urdu script first, then transliterated word by word (no translation). Contextual rules, lexicon, morphology, English code-switch detection, your own spelling dictionary. Switch Urdu script ↔ Roman Urdu at any time without re-transcribing. |
 | Editing | Click to select & seek, double-click/Enter to edit, add, delete, duplicate, split (at text cursor or playhead), merge, exact start/end inputs, search. Word timings are kept when you edit text (unchanged words keep their real audio timing). |
 | Styling | Font family (incl. Urdu Nastaliq/Naskh fonts), custom font upload, size, weight, bold/italic/underline, letter spacing, line height, casing, wrapping, max lines, max width. Text colour + HEX + opacity, per-word colours. Background: none/solid/semi-transparent, colour, opacity, padding, corner radius, width, min height, one box or box per line. Outline colour/thickness. Shadow colour/opacity/blur/offset. Position presets, X/Y, drag on the video with centre snapping, left/centre/right alignment. |
 | Animation | Fade in/out, pop in, slide up/down (all off by default). Word modes: highlight active word, karaoke fill, word-by-word appearance, word-by-word + highlight, all driven by the real word timestamps. |
-| Presets | 10 built-in presets (Classic White, Bold White on Black, Yellow Highlight, Minimal Clean, Social Media, TikTok, YouTube Shorts, Podcast, Cinematic, Word-by-Word). Save/reuse your own. Presets never touch text or timing. |
-| Timeline | Time ruler, video filmstrip, audio waveform, caption blocks. Drag to move, drag edges to resize (no overlaps), click/drag to scrub, Ctrl+wheel zoom, fit, auto-follow playhead, split/merge/delete/add toolbar. Selection is synced with the caption list. |
+| Presets | 10 built-in presets (Classic White, Bold White on Black, Yellow Highlight, Minimal Clean, Social Media, TikTok, YouTube Shorts, Podcast, Cinematic, Word-by-Word). Save/reuse your own. The preset matching the current style is marked selected (✓); one you applied and then changed is marked *Edited*. Presets never touch text or timing. |
+| Timeline | Time ruler, audio waveform, caption blocks. Drag to move, drag edges to resize (no overlaps), click/drag to scrub, Ctrl+wheel zoom, fit, auto-follow playhead, split/merge/delete/add toolbar. Selection is synced with the caption list. |
 | Preview | Original video in the chosen aspect ratio (Original, 16:9, 9:16, 1:1, 4:5) with Fit (bars, custom colour) or Fill (crop), zoom, fullscreen. Captions are drawn in their exact export position. |
-| Export | MP4 H.264 or H.265, Original/720p/1080p/4K, original/24/25/30/60 fps, quality presets, burned-in captions on/off, SRT/VTT/ASS files, live progress, cancel, in-app preview of the rendered file, download. |
+| Export | MP4 (H.264, high quality), Original/720p/1080p/4K, original/24/25/30/60 fps, burned-in captions on/off, live progress, cancel, in-app preview of the rendered file, download; the file is also kept in `backend/exports/`. |
 | Projects | Create, rename, delete, reopen; everything auto-saves to SQLite (debounced) and Ctrl+S creates a named restore point. Restore points are also made automatically before regenerating/converting. |
 | History | Undo/redo for text, styling, timeline moves and deletions (Ctrl+Z / Ctrl+Shift+Z). Slider drags are grouped into one undo step. |
 
@@ -97,7 +98,8 @@ backend/app/
     video_processing.py       ffprobe, audio extraction, waveform, preview proxy
     transcription.py          Faster-Whisper (model cache, VAD, word timestamps, language ID)
     subtitle_alignment.py     timing clean-up, optional WhisperX alignment, caption segmentation
-    transliteration.py        Urdu → Roman Urdu (+ urdu_lexicon.py, english_loanwords.py)
+    transliteration.py        Urdu → Roman Urdu (+ urdu_lexicon.py, urdu_lexicon_extra.py, english_loanwords.py)
+    transcript_align.py       sync a pasted transcript to the speech (phonetic matching + alignment)
     caption_layout.py         line wrapping / box geometry (mirrors frontend/src/preview/captionLayout.ts)
     subtitle_formats.py       SRT / VTT / ASS writers (ASS = styled burn-in script)
     ffmpeg_renderer.py        final render
@@ -125,6 +127,24 @@ frontend/src/
 
 Roman Urdu has no standard spelling (bohat/bahut, hai/he). The built-in choices follow common Pakistani usage and
 everything is editable.
+
+### Syncing your own transcript
+
+When the speech model mishears words, the *text* is wrong but its *timing* is still good: it knows when each word was
+said. "Use my own transcript" uses Whisper only as a timing reference:
+
+1. The video is transcribed once (the raw word timings are cached per video/model/language, so syncing again takes seconds).
+2. Your words and Whisper's words are turned into spelling-insensitive phonetic keys (*bohat* ≈ *bahut*, *nahin* ≈ *nahi*,
+   `عبداللہ` ≈ *Abdullah*). Urdu/Hindi script on either side is romanised first.
+3. **Anchors:** words that occur exactly once on both sides (names, rare nouns), kept in a consistent order (longest
+   increasing subsequence), so repeated phrases can't pull the alignment to the wrong place.
+4. Between anchors, a similarity-weighted alignment (dynamic programming) matches the rest. Skipping a user word is free (it
+   may have been misheard); skipping speech between matched words costs a little, so a word is never matched to the same
+   word said much earlier. Speech before/after the transcript is ignored, so a transcript may cover only part of the video.
+5. Matched words take Whisper's timing; unmatched words are timed between their neighbours. Captions are then built like
+   auto-generate, or one per line of your text. SRT/VTT input is accepted (its timings are ignored and re-synced).
+
+The result tells you what share of your words was matched to the audio.
 
 ### Word-level timestamps
 
@@ -156,6 +176,7 @@ GET    /api/projects/{id}/history        POST /api/projects/{id}/history/{snapsh
 POST   /api/videos/upload?projectId=&filename=     (raw streaming body)
 GET    /api/videos/{id}/metadata | /stream (range) | /waveform      DELETE /api/videos/{id}
 GET    /api/transcription/options        POST /api/transcription/start        GET /api/transcription/{job}/status
+POST   /api/transcription/align          {projectId, text, language, model, captionLength, lineMode: auto|lines}
 GET    /api/subtitles/{project}          PUT  /api/subtitles/{project}         (whole document, used by auto-save)
 POST   /api/subtitles/{project}/segments PUT|DELETE /api/subtitles/segment/{segment}
 POST   /api/subtitles/{project}/convert  GET  /api/subtitles/{project}/download/{srt|vtt|ass}
@@ -179,7 +200,8 @@ Tested on Windows 11, i5-10210U (4 cores), 8 GB RAM, no GPU, `small` model, int8
 | Mixed Urdu-English | `Aaj ki meeting bohat achi thi. Hum ne apna project complete kar liya hai aur kal presentation hogi.` |
 | Urdu script ↔ Roman Urdu conversion | round-trips without re-transcription, word timings preserved |
 | Preview vs export | Screenshot of the browser preview and the FFmpeg frame at the same time match (wrapping, box, outline, shadow, position) |
-| Export | H.264 720p/1080p/original, 9:16 and 16:9, burned captions + SRT/VTT/ASS; word highlight follows audio |
+| Export | H.264 720p/1080p/original, 9:16 and 16:9, burned captions; word highlight follows audio |
+| Own transcript sync | Roman Urdu with different spellings, extra/missing words, misheard words, kept lines, Urdu script and SRT input all land on the right audio; 30-minute transcript (4,200 words) aligned in 0.3 s; partial transcripts (start/middle/end only) placed correctly |
 | Editor UI (Edge, automated) | upload → process → generate → edit / split / merge / undo / redo / timeline drag / preset / word colour / save → export, no console errors |
 | Cancellation & validation | running transcription cancels cleanly; unsupported language/resolution rejected with clear messages |
 | 5-minute 1080p, 200 MB | see "Performance" below |
@@ -209,7 +231,8 @@ An NVIDIA GPU (`WHISPER_DEVICE=cuda`) makes it many times faster. Style changes 
 * **AI transcription is never 100 % accurate.** Noise, music, accents, fast or overlapping speech reduce accuracy. Always review.
   For Urdu, `small` is usable but `medium` / `large-v3-turbo` are clearly better (slower on CPU).
 * **Roman Urdu spelling** is rule- and lexicon-based. Common words, names and English loanwords are handled; rare words
-  use a heuristic and may need a fix (add it to the dictionary once).
+  use a heuristic and may need a fix (add it to the dictionary once). The transliteration can only be as good as the
+  Urdu text the speech model heard. For exact text, use **Use my own transcript**.
 * **Speaker diarization** (who is speaking) is not included in the default install. It needs pyannote with a Hugging Face token.
   Segments have a `speaker` field ready for it.
 * **English translation** uses Whisper's built-in speech translation (any language → English). Other target languages

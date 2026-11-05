@@ -10,7 +10,7 @@ from ..models import Job
 from ..services import project_service as ps
 from ..services import subtitle_alignment as align
 from ..services import transcription as asr
-from ..workers.jobs import transcribe_job
+from ..workers.jobs import align_job, transcribe_job
 from ..workers.manager import job_to_dict, manager
 
 router = APIRouter(tags=["transcription"])
@@ -30,6 +30,18 @@ class TranscribeRequest(BaseModel):
     model: str | None = None
     captionLength: str = "medium"
     useWhisperX: bool = True
+
+
+class AlignRequest(BaseModel):
+    projectId: str
+    text: str
+    language: str = "auto"
+    model: str | None = None
+    captionLength: str = "medium"
+    lineMode: str = "auto"  # auto = fit captions to the screen, lines = one caption per pasted line
+
+
+MAX_TRANSCRIPT_CHARS = 400_000
 
 
 @router.get("/api/transcription/options")
@@ -62,11 +74,42 @@ def start(body: TranscribeRequest, db: Session = Depends(get_db)):
         raise HTTPException(422, "Unknown language")
     if body.model and body.model not in {m["id"] for m in asr.AVAILABLE_MODELS} and "/" not in body.model:
         raise HTTPException(422, "Unknown model")
-    running = db.query(Job).filter(Job.project_id == p.id, Job.type == "transcribe",
+    _ensure_idle(db, p.id)
+    return manager.submit("transcribe", p.id, body.model_dump(), transcribe_job)
+
+
+def _ensure_idle(db: Session, project_id: str) -> None:
+    running = db.query(Job).filter(Job.project_id == project_id, Job.type == "transcribe",
                                    Job.status.in_(["queued", "running"])).first()
     if running:
         raise HTTPException(409, "Captions are already being generated for this project.")
-    return manager.submit("transcribe", p.id, body.model_dump(), transcribe_job)
+
+
+@router.post("/api/transcription/align")
+def start_align(body: AlignRequest, db: Session = Depends(get_db)):
+    """Sync a pasted transcript (plain text, SRT or VTT) to the speech in the project's video."""
+    p = ps.get_project(db, body.projectId)
+    if not p:
+        raise HTTPException(404, "Project not found")
+    if not p.video:
+        raise HTTPException(400, "Upload a video before syncing a transcript.")
+    if p.video.status != "ready":
+        raise HTTPException(400, p.video.error or "The video is still being processed.")
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(422, "Paste or upload a transcript first.")
+    if len(text) > MAX_TRANSCRIPT_CHARS:
+        raise HTTPException(422, f"The transcript is too long (max {MAX_TRANSCRIPT_CHARS:,} characters).")
+    if body.language != "auto" and body.language not in asr.LANGUAGES:
+        raise HTTPException(422, "Unknown language")
+    if body.model and body.model not in {m["id"] for m in asr.AVAILABLE_MODELS} and "/" not in body.model:
+        raise HTTPException(422, "Unknown model")
+    if body.captionLength not in align.CAPTION_LENGTHS:
+        raise HTTPException(422, "Unknown caption length")
+    if body.lineMode not in ("auto", "lines"):
+        raise HTTPException(422, "Unknown line mode")
+    _ensure_idle(db, p.id)
+    return manager.submit("transcribe", p.id, {**body.model_dump(), "text": text, "mode": "align"}, align_job)
 
 
 @router.get("/api/transcription/{job_id}/status")

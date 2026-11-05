@@ -79,6 +79,8 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
       const finished = e.job.status !== prev?.status && ['done', 'error', 'cancelled'].includes(e.job.status)
       if (finished) {
         if (e.job.status === 'error') toast.error(`${labelFor(e.job.type)} failed: ${e.job.error}`)
+        else if (e.job.status === 'done' && e.job.type === 'transcribe' && e.job.result?.aligned)
+          toast.success(`Transcript synced: ${e.job.result?.segments ?? 0} captions, ${Math.round(Number(e.job.result?.matchRate ?? 0) * 100)}% of words matched to the audio`)
         else if (e.job.status === 'done' && e.job.type === 'transcribe') toast.success(`Captions generated (${e.job.result?.segments ?? 0} segments)`)
         else if (e.job.status === 'done' && e.job.type === 'process') toast.success('Video is ready')
       }

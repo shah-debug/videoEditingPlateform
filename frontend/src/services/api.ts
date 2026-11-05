@@ -52,6 +52,8 @@ export const api = {
   transcriptionOptions: () => request<TranscriptionOptions>('GET', '/api/transcription/options'),
   startTranscription: (body: { projectId: string; language: string; output: string; model?: string | null; captionLength: string }) =>
     request<Job>('POST', '/api/transcription/start', body),
+  alignTranscript: (body: { projectId: string; text: string; language: string; model?: string | null; captionLength: string; lineMode: 'auto' | 'lines' }) =>
+    request<Job>('POST', '/api/transcription/align', body),
   cancelJob: (jobId: string) => request('POST', `/api/jobs/${jobId}/cancel`),
   job: (jobId: string) => request<Job>('GET', `/api/jobs/${jobId}`),
 

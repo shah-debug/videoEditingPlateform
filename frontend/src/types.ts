@@ -81,6 +81,8 @@ export interface Settings {
   outputScript: string
   model: string | null
   captionLength: string
+  /** preset last applied from the Presets panel (shown as selected / edited) */
+  presetId?: string | null
 }
 
 export interface VideoMeta {

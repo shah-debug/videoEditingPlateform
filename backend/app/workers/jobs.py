@@ -1,6 +1,7 @@
 """Job implementations: video processing, transcription, export."""
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 from pathlib import Path
@@ -11,9 +12,11 @@ from ..models import Project, Video
 from ..services import project_service as ps
 from ..services import subtitle_alignment as align
 from ..services import transcription as asr
+from ..services import transcript_align as talign
 from ..services import video_processing as vp
 from ..services.ffmpeg_renderer import render, safe_filename, write_subtitle_files, output_size
 from ..services.transliteration import Transliterator, has_arabic
+from ..utils.proc import Cancelled
 from .manager import JobContext, hub
 
 log = logging.getLogger(__name__)
@@ -108,10 +111,11 @@ def transcribe_job(ctx: JobContext, params: dict) -> dict:
             raise ValueError("This video has no audio track, so there is nothing to transcribe.")
         audio = Path(v.audio_path) if v.audio_path else None
         src, duration = Path(v.path), float(v.meta.get("duration", 0))
+        video_id = v.id
         user_dict = ps.user_dictionary(db)
 
     if not audio or not audio.exists():
-        audio = UPLOAD_DIR / v.id / "audio.wav"
+        audio = UPLOAD_DIR / video_id / "audio.wav"
         vp.extract_audio(src, audio, duration, ctx.sub(0.0, 0.05, "Extracting audio"), ctx.cancel)
 
     loaded_note = "" if asr.is_model_downloaded(model or asr.WHISPER_DEFAULT_MODEL) else \
@@ -135,6 +139,8 @@ def transcribe_job(ctx: JobContext, params: dict) -> dict:
         stage = "Translating speech to English" if task == "translate" else "Transcribing speech"
         result = asr.transcribe(audio, lang, task, model, lambda f, txt="": ctx.update(0.1 + 0.78 * f, stage, txt),
                                 ctx.cancel)
+    if task == "transcribe":
+        _save_asr_cache(video_id, model, lang, result)
 
     words = result["words"]
     ctx.update(0.9, "Aligning word timestamps")
@@ -181,6 +187,134 @@ def transcribe_job(ctx: JobContext, params: dict) -> dict:
                       "model": model, "captionLength": length}
     hub.publish(project_id, {"event": "subtitles", "projectId": project_id})
     return {"segments": len(captions), "language": result["language"], "notes": notes}
+
+
+# ------------------------------------------------------------------ Whisper result cache
+# Raw word timings per (video, model, language), so syncing a pasted transcript after auto-generate (or
+# syncing again with a corrected text) doesn't run the speech model again.
+
+
+def _asr_cache_path(video_id: str, model: str | None, lang: str | None) -> Path:
+    name = (model or asr.WHISPER_DEFAULT_MODEL).replace("/", "_")
+    return UPLOAD_DIR / video_id / f"asr_{name}_{lang or 'auto'}.json"
+
+
+def _save_asr_cache(video_id: str, model: str | None, lang: str | None, result: dict) -> None:
+    try:
+        data = {k: result[k] for k in ("language", "languageProbability", "duration", "words")}
+        _asr_cache_path(video_id, model, lang).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:  # the cache is only an optimisation
+        log.warning("Could not save transcription cache: %s", e)
+
+
+def _load_asr_cache(video_id: str, model: str | None, lang: str | None) -> dict | None:
+    p = _asr_cache_path(video_id, model, lang)
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    except Exception:
+        return None
+
+
+# ------------------------------------------------------------------ sync a pasted transcript
+
+
+def align_job(ctx: JobContext, params: dict) -> dict:
+    """Time the user's own transcript against the speech, then build captions from it."""
+    project_id = ctx.project_id
+    language = params.get("language") or "auto"
+    model = params.get("model") or None
+    length = params.get("captionLength") or "medium"
+    line_mode = params.get("lineMode") or "auto"
+    tokens, n_lines = talign.parse_transcript(params.get("text") or "")
+    if not tokens:
+        raise ValueError("The transcript is empty.")
+
+    with session_scope() as db:
+        p = ps.get_project(db, project_id)
+        if not p or not p.video:
+            raise ValueError("Upload a video first.")
+        v = p.video
+        if not v.meta.get("hasAudio", True):
+            raise ValueError("This video has no audio track, so the transcript can't be synced to speech.")
+        audio = Path(v.audio_path) if v.audio_path else None
+        src, duration = Path(v.path), float(v.meta.get("duration", 0))
+        video_id = v.id
+        user_dict = ps.user_dictionary(db)
+
+    if not audio or not audio.exists():
+        audio = UPLOAD_DIR / video_id / "audio.wav"
+        vp.extract_audio(src, audio, duration, ctx.sub(0.0, 0.05, "Extracting audio"), ctx.cancel)
+
+    text_is_urdu_like = any(has_arabic(t.text) for t in tokens) or language in ("ur", "hi", "pa")
+    lang = None if language == "auto" else language
+    notes: list[str] = []
+    result = _load_asr_cache(video_id, model, lang) if lang else None
+    if result:
+        ctx.update(0.6, "Using the earlier speech analysis of this video")
+    else:
+        loaded_note = "" if asr.is_model_downloaded(model or asr.WHISPER_DEFAULT_MODEL) else \
+            " (downloading model, first time only)"
+        ctx.update(0.06, "Waiting for speech engine")
+        with asr.transcribe_lock:
+            ctx.update(0.07, "Loading speech model" + loaded_note)
+            asr.get_model(model)
+            if lang is None:
+                ctx.update(0.09, "Detecting spoken language")
+                lang = asr.detect_language(audio, model)["language"]
+                # Urdu speech is often labelled Hindi; Urdu-script output matches Roman Urdu text better
+                if lang == "hi":
+                    lang = "ur"
+            result = _load_asr_cache(video_id, model, lang)
+            if not result:
+                result = asr.transcribe(
+                    audio, lang, "transcribe", model,
+                    lambda f, txt="": ctx.update(0.1 + 0.75 * f, "Finding when each word is spoken", txt),
+                    ctx.cancel)
+                _save_asr_cache(video_id, model, lang, result)
+
+    ctx.update(0.88, "Matching your transcript to the speech")
+    asr_words = align.clean_words(result.get("words") or [])
+    if not asr_words:
+        raise ValueError("No speech was detected in this video, so the transcript can't be synced.")
+    words, stats = talign.align_tokens(tokens, asr_words, duration or result.get("duration") or 0, user_dict)
+    if ctx.cancel.is_set():
+        raise Cancelled()
+
+    ctx.update(0.95, "Building captions")
+    if line_mode == "lines" and n_lines > 1:
+        captions = talign.captions_from_lines(words)
+    else:
+        latin = not any(has_arabic(w["text"]) for w in words)
+        captions = align.segment_words(talign.clean_for_segmenter(words), length,
+                                       "ur-Latn" if latin and text_is_urdu_like else None)
+
+    pct = round(stats["rate"] * 100)
+    notes.append(f"Transcript synced to the speech: {pct}% of your words were matched to the audio, "
+                 "the rest were timed between their neighbours.")
+    if stats["rate"] < 0.35:
+        notes.append("Few words matched. Check that the transcript belongs to this video and that the spoken "
+                     "language is right; some timings may be rough.")
+
+    with session_scope() as db:
+        p = ps.get_project(db, project_id, with_segments=True)
+        ps.snapshot(db, p, "Before syncing pasted transcript")
+        ps.replace_segments(db, p, captions)
+        p.transcription = {
+            "language": result.get("language"),
+            "languageProbability": result.get("languageProbability"),
+            "requestedLanguage": language,
+            "output": "transcript",
+            "task": "align",
+            "model": model or asr.WHISPER_DEFAULT_MODEL,
+            "captionLength": length,
+            "lineMode": line_mode,
+            "wordCount": len(words),
+            "matchRate": stats["rate"],
+            "notes": notes,
+        }
+        p.settings = {**(p.settings or {}), "captionLength": length}
+    hub.publish(project_id, {"event": "subtitles", "projectId": project_id})
+    return {"segments": len(captions), "aligned": True, "matchRate": stats["rate"], "notes": notes}
 
 
 def romanise_words(words: list[dict], user_dict: dict[str, str]) -> list[dict]:
@@ -249,4 +383,4 @@ def _video_path(video_id: str) -> str:
         return db.get(Video, video_id).path
 
 
-__all__ = ["process_video_job", "transcribe_job", "export_job", "romanise_words", "Project"]
+__all__ = ["process_video_job", "transcribe_job", "align_job", "export_job", "romanise_words", "Project"]
