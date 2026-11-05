@@ -1,0 +1,15 @@
+# AI Caption Studio backend (Python 3.11+). Install:  pip install -r requirements.txt
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30
+sqlalchemy>=2.0
+python-dotenv>=1.0
+numpy>=1.26
+# speech recognition (CTranslate2 Whisper, CPU int8 / CUDA float16) + bundled Silero VAD
+faster-whisper>=1.1
+# font metrics + text shaping (keeps preview and export line-wrapping identical)
+fonttools>=4.50
+uharfbuzz>=0.40
+
+# Optional: tighter word timestamps via forced alignment (large download, needs PyTorch).
+#   pip install whisperx
+# The app detects it automatically and falls back to Faster-Whisper word timestamps otherwise.

@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+backend/.venv/
+# runtime data
+data/
+backend/uploads/
+backend/exports/
+backend/temp/
+backend/fonts/user/
+.env
+# frontend
+frontend/node_modules/
+frontend/dist/
