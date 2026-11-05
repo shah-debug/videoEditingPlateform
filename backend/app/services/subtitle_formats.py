@@ -20,13 +20,29 @@ def tokenize(text: str) -> list[str]:
     return [t for t in re.split(r"\s+", (text or "").strip()) if t]
 
 
+def timings_broken(words: list[dict], start: float, end: float) -> bool:
+    """True when word timings can't be right: words overlapping each other, squeezed to ~0 length, or outside
+    the caption. Happens with captions edited by older versions; such words are re-spread evenly.
+    Mirrors wordsLookBroken() in frontend/src/subtitles/wordSync.ts."""
+    tol = 0.1
+    prev_end = None
+    for w in words:
+        ws, we = float(w["start"]), float(w["end"])
+        if we - ws < 0.02 or ws < start - tol or we > end + tol:
+            return True
+        if prev_end is not None and ws < prev_end - 0.01:
+            return True
+        prev_end = we
+    return False
+
+
 def display_words(seg: dict) -> list[dict]:
     """Words aligned 1:1 with the caption text tokens. If stored word timings don't line up with the
-    current text (e.g. user edited text outside the editor), timings are interpolated."""
+    current text (e.g. user edited text outside the editor) or are broken, timings are interpolated."""
     tokens = tokenize(seg.get("text", ""))
     words = seg.get("words") or []
     start, end = float(seg["start"]), float(seg["end"])
-    if words and len(words) == len(tokens):
+    if words and len(words) == len(tokens) and not timings_broken(words, start, end):
         return [
             {**w, "text": tok, "start": float(w["start"]), "end": float(w["end"])}
             for w, tok in zip(words, tokens)
@@ -35,9 +51,10 @@ def display_words(seg: dict) -> list[dict]:
         return []
     total = sum(max(1, len(t)) for t in tokens)
     out, t = [], start
-    for tok in tokens:
+    for i, tok in enumerate(tokens):
         d = (end - start) * max(1, len(tok)) / total
-        out.append({"text": tok, "start": t, "end": t + d, "color": None})
+        color = words[i].get("color") if i < len(words) else None
+        out.append({"text": tok, "start": t, "end": t + d, "color": color})
         t += d
     return out
 

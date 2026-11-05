@@ -36,17 +36,39 @@ export function resyncWords(old: Word[], text: string, start: number, end: numbe
     if (match[k] !== null) { k++; continue }
     let e = k
     while (e < out.length && match[e] === null) e++
-    const lo = k > 0 ? out[k - 1].end : start
+    let from = k
+    let lo = k > 0 ? out[k - 1].end : start
     const hi = e < out.length ? out[e].start : end
-    const span = Math.max(0.04 * (e - k), hi - lo)
-    const base = hi - lo >= 0.04 * (e - k) ? lo : Math.max(start, lo - span / 2)
-    for (let q = k; q < e; q++) {
-      out[q].start = base + (span * (q - k)) / (e - k)
-      out[q].end = base + (span * (q - k + 1)) / (e - k)
-    }
+    // No room between the neighbours (e.g. words typed after the last word): share the previous word's
+    // time with the new words instead of squeezing them into a zero-length slot.
+    if (hi - lo < 0.12 * (e - k) && k > 0) { from = k - 1; lo = out[k - 1].start }
+    spread(out, from, e, lo, Math.max(lo + 0.04 * (e - from), hi))
     k = e
   }
   return out
+}
+
+/** Spread words[from..to) over [lo, hi] in proportion to their length. */
+function spread(words: Word[], from: number, to: number, lo: number, hi: number) {
+  const total = words.slice(from, to).reduce((s, w) => s + Math.max(1, w.text.length), 0)
+  let t = lo
+  for (let q = from; q < to; q++) {
+    const d = ((hi - lo) * Math.max(1, words[q].text.length)) / total
+    words[q] = { ...words[q], start: t, end: t + d }
+    t += d
+  }
+}
+
+/** Word timings that can't be right (overlapping, ~0 length or outside the caption), e.g. from captions edited
+ * by older versions. Such words are re-spread evenly. Mirrors timings_broken() in subtitle_formats.py. */
+export function wordsLookBroken(words: Word[], start: number, end: number): boolean {
+  const tol = 0.1
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i]
+    if (w.end - w.start < 0.02 || w.start < start - tol || w.end > end + tol) return true
+    if (i > 0 && w.start < words[i - 1].end - 0.01) return true
+  }
+  return false
 }
 
 export function evenWords(toks: string[], start: number, end: number, colorsFrom?: Word[]): Word[] {
@@ -63,7 +85,8 @@ export function evenWords(toks: string[], start: number, end: number, colorsFrom
 /** Words aligned 1:1 with caption tokens (same rule as display_words() on the backend). */
 export function displayWords(seg: Segment): Word[] {
   const toks = tokenize(seg.text)
-  if (seg.words.length === toks.length) return seg.words.map((w, i) => ({ ...w, text: toks[i] }))
+  if (seg.words.length === toks.length && !wordsLookBroken(seg.words, seg.start, seg.end))
+    return seg.words.map((w, i) => ({ ...w, text: toks[i] }))
   return evenWords(toks, seg.start, seg.end, seg.words)
 }
 

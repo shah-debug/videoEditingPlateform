@@ -55,8 +55,10 @@ def english_key(word: str) -> str:
     w = re.sub(r"c(?=[eiy])", "s", w)
     w = w.replace("c", "k").replace("q", "k").replace("x", "ks").replace("z", "s").replace("v", "w")
     w = re.sub(r"(?<=.)g(?=[eiy])", "j", w)  # soft g (page, message, college) but not get/give/gift
-    w = re.sub(r"[aeiouyh]", "", w)
+    # merge doubled letters (coffee, class) BEFORE dropping vowels: consonants separated by a vowel stay
+    # separate, so "paper" is p-p-r and "menu" m-n (otherwise ماموں would match "menu")
     w = re.sub(r"(.)\1+", r"\1", w)
+    w = re.sub(r"[aeiouyh]", "", w)
     return ("V" if initial_vowel else "") + w
 
 
@@ -71,6 +73,7 @@ _URDU_VOWELS = set("اآعءئیےۓہھحو")
 def urdu_key(word: str) -> str:
     out = []
     initial_vowel = bool(word) and word[0] in "اآعای"
+    # no merging of repeated consonants: Urdu doesn't write short vowels, so سسٹم is s-s-t-m like "system"
     for i, ch in enumerate(word):
         if ch in _URDU_MAP:
             out.append(_URDU_MAP[ch])
@@ -79,7 +82,7 @@ def urdu_key(word: str) -> str:
             nxt = word[i + 1] if i + 1 < len(word) else ""
             if i == 0 or nxt in "اآیے":
                 out.append("w")
-    key = re.sub(r"(.)\1+", r"\1", "".join(out))
+    key = "".join(out)
     return ("V" if initial_vowel else "") + key
 
 

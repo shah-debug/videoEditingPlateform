@@ -18,7 +18,11 @@ import re
 import unicodedata
 
 from .english_loanwords import match_english
-from .urdu_lexicon import LEXICON as _RAW_LEX
+from .urdu_lexicon import LEXICON as _CURATED_LEX, _parse
+from .urdu_lexicon_extra import _RAW as _EXTRA_RAW, VERB_STEMS_RAW
+
+# curated entries win over the bulk vocabulary list
+_RAW_LEX = {**_parse(_EXTRA_RAW), **_CURATED_LEX}
 
 _NORMALISE = str.maketrans({
     "ي": "ی",  # Arabic yeh -> Farsi/Urdu yeh
@@ -58,6 +62,28 @@ def strip_diacritics(text: str) -> str:
 
 LEXICON: dict[str, str] = {strip_diacritics(normalise(k)): v for k, v in _RAW_LEX.items()}
 PHRASES: dict[str, str] = {k: v for k, v in LEXICON.items() if " " in k}
+
+# verb roots -> (roman stem, roman stem used before a vowel ending)
+VERB_STEMS: dict[str, tuple[str, str]] = {}
+for _line in VERB_STEMS_RAW.strip().splitlines():
+    _u, _, _r = _line.strip().partition(" ")
+    if _u and _r:
+        _full, _, _short = _r.partition("/")
+        VERB_STEMS[strip_diacritics(normalise(_u))] = (_full, _short or _full)
+# bare roots are also words (imperative: کر kar, سن sun, لکھ likh)
+for _u, (_full, _) in VERB_STEMS.items():
+    LEXICON.setdefault(_u, _full)
+
+# verb endings, longest first. (urdu ending, roman after a consonant root, roman after a vowel root)
+_VERB_ENDINGS = [
+    ("ئیے", "iye", "iye"), ("یئے", "iye", "iye"), ("ئیں", "ein", "yein"), ("ئیو", "iyo", "yo"),
+    ("یے", "iye", "iye"), ("ؤں", "un", "un"), ("وں", "un", "un"), ("یں", "ein", "ein"),
+    ("ئے", "e", "ye"), ("ئی", "i", "yi"), ("یا", "ya", "ya"),
+    ("نا", "na", "na"), ("نی", "ni", "ni"), ("نے", "ne", "ne"),
+    ("تا", "ta", "ta"), ("تی", "ti", "ti"), ("تے", "te", "te"),
+    ("ؤ", "o", "o"), ("و", "o", "o"), ("ے", "e", "e"), ("ا", "a", "ya"), ("ی", "i", "yi"),
+]
+_VOWEL_START = ("i", "e", "o", "u", "a", "y")
 
 
 def has_arabic(text: str) -> bool:
@@ -191,6 +217,9 @@ def _fallback(word: str) -> str:
             if initial or final_pair:
                 res.append("a")
     s = "".join(res)
+    letters = [c for c in word if c not in _DIAC and c != "ّ"]
+    if len(letters) == 3 and letters[1] == "ا" and letters[0] in _CONS and letters[2] in _CONS:
+        s = _CONS[letters[0]] + "aa" + _CONS[letters[2]]
     s = re.sub(r"aaa+", "aa", s)
     s = re.sub(r"(.)\1{2,}", r"\1\1", s)
     return s
@@ -246,6 +275,7 @@ def romanise_devanagari(word: str) -> str:
 
 class Transliterator:
     def __init__(self, user_dict: dict[str, str] | None = None):
+        self._ne_in_clause = False
         self.user = {strip_diacritics(normalise(k)).strip(): v for k, v in (user_dict or {}).items() if k.strip()}
 
     def _lookup(self, core: str) -> str | None:
@@ -260,6 +290,10 @@ class Transliterator:
                 stem = self._lookup(core[: -len(suf)])
                 if stem:
                     return stem + LEXICON[suf]
+        # conjugated verbs: root + ending (لکھتے likhte, سمجھو samjho, کھائیں khayein)
+        verb = self._verb(core)
+        if verb:
+            return verb
         # oblique plural -وں, plural -یں, -یاں
         for suf, rom in (("وں", "on"), ("یں", "ein"), ("یاں", "iyan"), ("ئیں", "ein")):
             if core.endswith(suf) and len(core) > len(suf) + 1:
@@ -270,14 +304,31 @@ class Transliterator:
                     return base + rom
         return None
 
+    @staticmethod
+    def _verb(core: str) -> str | None:
+        for end, after_c, after_v in _VERB_ENDINGS:
+            if not core.endswith(end) or len(core) <= len(end):
+                continue
+            stem = VERB_STEMS.get(core[: -len(end)])
+            if not stem:
+                continue
+            full, short = stem
+            vowel_root = full[-1] in "aeiou"
+            if vowel_root:
+                return full + after_v
+            return (short if after_c.startswith(_VOWEL_START) else full) + after_c
+        return None
+
     def _contextual(self, core: str, prev: str | None, nxt: str | None, sentence_start: bool) -> str | None:
         if core == "کیا":
             # past tense of karna ("kiya") vs question word ("kya")
+            if sentence_start:
+                return "kya"
             if nxt == "کیا":
                 return "kya"
             if prev == "کیا":
                 return "kiya"
-            if prev == "نے" or nxt in {"ہے", "تھا", "تھی", "تھے", "گیا", "گئی", "گئے", "جائے", "جاتا", "جاتی",
+            if prev == "نے" or self._ne_in_clause or nxt in {"ہے", "تھا", "تھی", "تھے", "گیا", "گئی", "گئے", "جائے", "جاتا", "جاتی",
                                         "جاتے", "جا", "ہوا"}:
                 return "kiya"
             return "kya"
@@ -320,17 +371,25 @@ class Transliterator:
         cores = [strip_diacritics(c) for _, c, _ in parts]
         out: list[tuple[str, list[int]]] = []
         sentence_start = True
+        self._ne_in_clause = False  # an ergative نے earlier in the clause makes کیا the verb "kiya"
         i = 0
         n = len(words)
         while i < n:
             lead, core, trail = parts[i]
             prev = cores[i - 1] if i > 0 else None
             nxt = cores[i + 1] if i + 1 < n else None
+            if sentence_start:
+                self._ne_in_clause = False
+                prev = None  # context never crosses a sentence boundary
+            if any(c in trail for c in "۔؟.!?"):
+                nxt = None
             # two-word phrase (e.g. اسلام آباد, ان شاءاللہ)
             if i + 1 < n and not trail and not parts[i + 1][0]:
                 phrase = f"{cores[i]} {cores[i + 1]}"
                 if phrase in self.user or phrase in PHRASES:
                     rom = self.user.get(phrase) or PHRASES[phrase]
+                    if "نے" in (cores[i], cores[i + 1]):
+                        self._ne_in_clause = True
                     t2 = parts[i + 1][2]
                     out.append((_map_punct(lead) + rom + _map_punct(t2), [i, i + 1]))
                     sentence_start = any(c in t2 for c in "۔؟.!?")
@@ -339,11 +398,18 @@ class Transliterator:
             if core in FUTURE_PARTICLES and out and not lead and prev and has_arabic(prev) \
                     and prev not in _NO_MERGE_BEFORE and not parts[i - 1][2]:
                 rom_prev, idxs = out[-1]
+                # karein + ge -> karenge, jayein + ge -> jayenge, hun + ga -> hoonga
+                if rom_prev.endswith("ein"):
+                    rom_prev = rom_prev[:-3] + "en"
+                elif rom_prev.lower() == "hun":
+                    rom_prev = rom_prev[:1] + "oon"
                 out[-1] = (rom_prev + FUTURE_PARTICLES[core] + _map_punct(trail), idxs + [i])
             else:
                 rom = self.word(core, prev, nxt, sentence_start)
                 out.append((_map_punct(lead) + rom + _map_punct(trail), [i]))
             sentence_start = any(c in trail for c in "۔؟.!?،,;؛:")
+            if core == "نے":
+                self._ne_in_clause = True
             i += 1
         return _sentence_case(out)
 

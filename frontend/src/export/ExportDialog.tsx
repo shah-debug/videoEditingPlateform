@@ -2,33 +2,26 @@ import { useState } from 'react'
 import { Download, Film, FileText, X } from 'lucide-react'
 import { useEditor } from '../editor/store'
 import { api, formatBytes } from '../services/api'
-import { Button, Field, Modal, Progress, Segmented, Select, Toggle, toast } from '../components/ui'
-import { outputSize } from '../preview/captionLayout'
+import { Button, Field, Modal, Progress, Select, Toggle, toast } from '../components/ui'
 import { saveNow } from '../subtitles/SubtitlePanel'
 
 export function ExportDialog({ onClose }: { onClose: () => void }) {
   const project = useEditor((s) => s.project)!
-  const settings = useEditor((s) => s.doc!.settings)
   const jobs = useEditor((s) => s.jobs)
-  const [renderVideo, setRenderVideo] = useState(true)
   const [burn, setBurn] = useState(true)
   const [resolution, setResolution] = useState('original')
   const [fps, setFps] = useState('original')
-  const [codec, setCodec] = useState('h264')
-  const [quality, setQuality] = useState('high')
-  const [subs, setSubs] = useState<Record<string, boolean>>({ srt: true, vtt: false, ass: false })
   const [name, setName] = useState(project.name)
   const [jobId, setJobId] = useState<string | null>(null)
   const job = jobId ? jobs[jobId] : null
   const meta = project.video?.meta && 'width' in project.video.meta ? project.video.meta : null
-  const [ow, oh] = meta ? outputSize(meta.width, meta.height, settings.aspectRatio, resolution) : [0, 0]
 
   const start = async () => {
     try {
       await saveNow()
       const j = await api.startExport({
-        projectId: project.id, renderVideo, burnCaptions: burn, resolution, fps, codec, quality,
-        subtitleFormats: Object.entries(subs).filter(([, v]) => v).map(([k]) => k), filename: name,
+        projectId: project.id, renderVideo: true, burnCaptions: burn, resolution, fps, codec: 'h264', quality: 'high',
+        subtitleFormats: [], filename: name,
       })
       useEditor.getState().upsertJob(j)
       setJobId(j.id)
@@ -50,40 +43,19 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
             <input value={name} onChange={(e) => setName(e.target.value)} className="w-full h-9 bg-ink-800 border border-ink-700 rounded-lg px-3 text-sm focus:outline-none focus:border-accent-500" />
           </Field>
           <div className="rounded-xl border border-ink-700 p-3.5 space-y-3">
-            <Toggle label="Export video (MP4)" checked={renderVideo} onChange={setRenderVideo} />
-            {renderVideo && <>
-              <Toggle label="Burn captions into the video" checked={burn} onChange={setBurn} />
-              <div className="grid grid-cols-2 gap-3">
+            <Toggle label="Burn captions into the video" checked={burn} onChange={setBurn} />
+            <div className="grid grid-cols-2 gap-3">
                 <Field label="Resolution">
                   <Select value={resolution} onChange={setResolution} options={[{ id: 'original', label: 'Original' }, { id: '720p', label: '720p' }, { id: '1080p', label: '1080p' }, { id: '4k', label: '4K (2160p)' }]} />
                 </Field>
                 <Field label="Frame rate">
                   <Select value={fps} onChange={setFps} options={[{ id: 'original', label: `Original${meta ? ` (${meta.fps})` : ''}` }, { id: '24', label: '24 fps' }, { id: '25', label: '25 fps' }, { id: '30', label: '30 fps' }, { id: '60', label: '60 fps' }]} />
                 </Field>
-                <Field label="Codec">
-                  <Segmented value={codec} onChange={setCodec} options={[{ id: 'h264', label: 'H.264' }, { id: 'h265', label: 'H.265' }]} />
-                </Field>
-                <Field label="Quality">
-                  <Segmented value={quality} onChange={setQuality} options={[{ id: 'high', label: 'High' }, { id: 'medium', label: 'Med' }, { id: 'low', label: 'Small' }]} />
-                </Field>
               </div>
-              <div className="text-[11px] text-ink-500">Output: {ow}×{oh} · {settings.aspectRatio === 'original' ? 'original aspect' : `${settings.aspectRatio} (${settings.fitMode})`} · MP4 {codec === 'h265' ? 'H.265/HEVC' : 'H.264'} + AAC</div>
-            </>}
-          </div>
-          <div className="rounded-xl border border-ink-700 p-3.5 space-y-2">
-            <div className="text-xs text-ink-300 mb-1">Subtitle files</div>
-            <div className="flex gap-4">
-              {(['srt', 'vtt', 'ass'] as const).map((f) => (
-                <label key={f} className="flex items-center gap-2 text-xs text-ink-300 cursor-pointer">
-                  <input type="checkbox" className="accent-[#7c5cff]" checked={subs[f]} onChange={(e) => setSubs({ ...subs, [f]: e.target.checked })} /> {f.toUpperCase()}
-                </label>
-              ))}
-            </div>
-            <p className="text-[11px] text-ink-500">ASS keeps the styling (fonts, colours, positions, word highlighting). SRT/VTT contain text and timing only.</p>
           </div>
           <div className="flex justify-end gap-2 pt-1">
             <Button onClick={onClose}>Close</Button>
-            <Button variant="primary" onClick={start} disabled={!renderVideo && !Object.values(subs).some(Boolean)}><Download size={15} /> Export</Button>
+            <Button variant="primary" onClick={start}><Download size={15} /> Export</Button>
           </div>
         </div>
       ) : running ? (

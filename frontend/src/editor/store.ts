@@ -1,7 +1,7 @@
 import { create } from 'zustand'
-import type { CaptionStyle, Job, Project, Segment, Settings } from '../types'
+import type { CaptionStyle, Job, Project, Segment, Settings, Word } from '../types'
 import { POSITION_Y } from '../types'
-import { mergeSegments, newId, resyncWords, retimeSegment, shiftSegment, splitSegment } from '../subtitles/wordSync'
+import { displayWords, mergeSegments, newId, resyncWords, retimeSegment, shiftSegment, splitSegment } from '../subtitles/wordSync'
 
 export interface Doc {
   segments: Segment[]
@@ -57,6 +57,9 @@ interface EditorState {
 const HISTORY_LIMIT = 200
 const COALESCE_MS = 900
 
+/** Words of the caption currently being typed in, captured before the first keystroke. Cleared by any other edit. */
+let textBase: { id: string; start: number; end: number; words: Word[] } | null = null
+
 const sortSegs = (s: Segment[]) => [...s].sort((a, b) => a.start - b.start || a.end - b.end)
 
 export const useEditor = create<EditorState>((set, get) => ({
@@ -74,13 +77,14 @@ export const useEditor = create<EditorState>((set, get) => ({
   dirtyVersion: 0,
   jobs: {},
 
-  load: (p) => set({
+  load: (p) => { textBase = null; set({
     project: p,
     doc: { segments: sortSegs(p.segments ?? []), style: p.style, settings: p.settings },
     past: [], future: [], selectedId: null, editingId: null, saveState: 'saved', dirtyVersion: 0, lastKey: null,
-  }),
+  }) },
   setProjectMeta: (patch) => set((s) => ({ project: s.project ? { ...s.project, ...patch } : s.project })),
   replaceDocFromServer: (p, recordHistory) => set((s) => {
+    textBase = null
     const doc: Doc = { segments: sortSegs(p.segments ?? []), style: p.style, settings: p.settings }
     return {
       project: { ...p },
@@ -99,6 +103,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     if (!s.doc) return
     const next = fn(s.doc)
     if (next === s.doc) return
+    if (!key?.startsWith('text-')) textBase = null
     const now = performance.now()
     const coalesce = !!key && key === s.lastKey && now - s.lastKeyTime < COALESCE_MS
     set({
@@ -114,12 +119,14 @@ export const useEditor = create<EditorState>((set, get) => ({
   undo: () => {
     const s = get()
     if (!s.past.length || !s.doc) return
+    textBase = null
     const prev = s.past[s.past.length - 1]
     set({ doc: prev, past: s.past.slice(0, -1), future: [s.doc, ...s.future], lastKey: null, saveState: 'unsaved', dirtyVersion: s.dirtyVersion + 1 })
   },
   redo: () => {
     const s = get()
     if (!s.future.length || !s.doc) return
+    textBase = null
     const nxt = s.future[0]
     set({ doc: nxt, past: [...s.past, s.doc], future: s.future.slice(1), lastKey: null, saveState: 'unsaved', dirtyVersion: s.dirtyVersion + 1 })
   },
@@ -129,10 +136,21 @@ export const useEditor = create<EditorState>((set, get) => ({
   setSaveState: (saveState, err = null) => set({ saveState, saveError: err }),
   upsertJob: (j) => set((s) => ({ jobs: { ...s.jobs, [j.id]: { ...(s.jobs[j.id] ?? {}), ...j } } })),
 
-  setText: (id, text) => get().commit((d) => ({
-    ...d,
-    segments: d.segments.map((s) => (s.id === id ? { ...s, text, words: resyncWords(s.words, text, s.start, s.end) } : s)),
-  }), `text-${id}`),
+  setText: (id, text) => {
+    // Re-sync against the words as they were before this caption's typing started, not against the
+    // half-typed intermediate state (which degrades timings keystroke by keystroke).
+    const seg = get().doc?.segments.find((s) => s.id === id)
+    if (!seg) return
+    let base = textBase
+    if (!base || base.id !== id || base.start !== seg.start || base.end !== seg.end) {
+      base = { id, start: seg.start, end: seg.end, words: displayWords(seg) }
+    }
+    get().commit((d) => ({
+      ...d,
+      segments: d.segments.map((s) => (s.id === id ? { ...s, text, words: resyncWords(base!.words, text, s.start, s.end) } : s)),
+    }), `text-${id}`)
+    textBase = base
+  },
 
   setTiming: (id, start, end, key) => get().commit((d) => ({
     ...d,

@@ -36,7 +36,17 @@ export function StylePanel() {
           )}
         </div>
         <Segmented value={sel ? scope : 'all'} onChange={(v) => useEditor.getState().setStyleScope(v)}
-          options={[{ id: 'all', label: 'All captions' }, { id: 'selected', label: sel ? 'Selected caption' : 'Select a caption', title: 'Override style for one caption only' }]} />
+          options={[
+            { id: 'all', label: 'All captions', title: 'Style changes apply to every caption in the video' },
+            { id: 'selected', label: 'Only this caption', title: 'Style changes apply only to the selected caption' },
+          ]} />
+        <p className="text-[11px] leading-relaxed text-ink-400">
+          {scope === 'selected' && sel
+            ? <>Changes apply <b className="text-ink-200">only to the selected caption</b> (e.g. make one line red or bigger). All other captions keep the main style.</>
+            : scope === 'selected'
+              ? <>First click a caption in the left list or on the timeline, then change its style here.</>
+              : <>Changes apply to <b className="text-ink-200">every caption</b>. To style just one line differently, select it and choose “Only this caption”.</>}
+        </p>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto">
         <PresetsSection />
