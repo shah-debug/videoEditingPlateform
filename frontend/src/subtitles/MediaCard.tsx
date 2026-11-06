@@ -1,3 +1,4 @@
+import { useOwnerWindow } from '../editor/PopoutWindow'
 import { useRef } from 'react'
 import { FileVideo, RefreshCw, Trash2 } from 'lucide-react'
 import { useEditor } from '../editor/store'
@@ -6,6 +7,7 @@ import { api, formatBytes, formatTime } from '../services/api'
 import { Progress, toast } from '../components/ui'
 
 export function MediaCard() {
+  const win = useOwnerWindow()
   const project = useEditor((s) => s.project)
   const jobs = useEditor((s) => s.jobs)
   const up = useUpload()
@@ -16,7 +18,7 @@ export function MediaCard() {
   const proc = Object.values(jobs).find((j) => j.type === 'process' && j.projectId === project.id && (j.status === 'running' || j.status === 'queued'))
 
   const remove = async () => {
-    if (!v || !confirm('Remove this video from the project? Captions are kept.')) return
+    if (!v || !win.confirm('Remove this video from the project? Captions are kept.')) return
     try {
       await api.deleteVideo(v.id)
       useEditor.getState().setProjectMeta({ video: null })

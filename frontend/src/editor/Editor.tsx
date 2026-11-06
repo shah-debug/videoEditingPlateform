@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Check, CloudOff, Download, History, Keyboard, Loader2, Redo2, Undo2, UploadCloud, X } from 'lucide-react'
+import { ArrowLeft, Check, CloudOff, Download, ExternalLink, History, Keyboard, Loader2, PanelLeftOpen, Redo2, Undo2, UploadCloud, X } from 'lucide-react'
 import { player, useEditor, useTime } from './store'
 import { ACCEPT, pendingUpload, useUpload } from './upload'
 import { api, connectEvents } from '../services/api'
 import { useFonts } from '../services/fonts'
-import { Button, Kbd, Modal, Progress, cx, toast } from '../components/ui'
-import { SubtitlePanel, saveNow } from '../subtitles/SubtitlePanel'
+import { Button, Kbd, Modal, Progress, Toasts, cx, toast } from '../components/ui'
+import { SubtitlePanel, saveNow, type PanelPlacement } from '../subtitles/SubtitlePanel'
+import { PopoutWindow, focusPopout } from './PopoutWindow'
 import { StylePanel } from '../settings/StylePanel'
 import { VideoPreview } from '../preview/VideoPreview'
 import { Timeline } from '../timeline/Timeline'
 import { ExportDialog } from '../export/ExportDialog'
 import { HistoryDialog } from './HistoryDialog'
 import type { Job } from '../types'
+
+const POPOUT_NAME = 'caption-studio-captions'
 
 function usePanelSize(key: string, initial: number, min: number, max: number) {
   const [size, setSize] = useState(() => {
@@ -46,6 +49,13 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
   const [exportOpen, setExportOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [keysOpen, setKeysOpen] = useState(false)
+  // captions panel opened in its own window (e.g. on a second screen)
+  const [popped, setPopped] = useState<PanelPlacement | null>(null)
+  const popOut = (where?: PanelPlacement) => setPopped({
+    left: where?.left ?? window.screenX + 60, top: where?.top ?? window.screenY + 60,
+    width: where?.width ?? Math.min(880, Math.round(window.screen.availWidth * 0.55)),
+    height: where?.height ?? Math.round(window.screen.availHeight * 0.85),
+  })
   const [left, setLeft] = usePanelSize('panel-left', 340, 260, 560)
   const [right, setRight] = usePanelSize('panel-right', 320, 260, 520)
   const [bottom, setBottom] = usePanelSize('panel-bottom', 230, 150, 480)
@@ -108,30 +118,10 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
     return () => window.removeEventListener('beforeunload', h)
   }, [])
 
-  // keyboard shortcuts
+  // keyboard shortcuts (also forwarded from the pop-out captions window)
   useEffect(() => {
-    const h = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement
-      const typing = t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable
-      const st = useEditor.getState()
-      const mod = e.ctrlKey || e.metaKey
-      if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); saveNow('Manual save').then(() => toast.success('Project saved')).catch(toast.error); return }
-      if (typing) return
-      if (mod && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); st.undo() }
-      else if (mod && ((e.key.toLowerCase() === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y')) { e.preventDefault(); st.redo() }
-      else if (e.key === ' ') { e.preventDefault(); player.toggle() }
-      else if ((e.key === 'Delete' || e.key === 'Backspace') && st.selectedId) { e.preventDefault(); st.deleteSegment(st.selectedId) }
-      else if (e.key === 'ArrowLeft') { e.preventDefault(); player.seek(useTime.getState().time - (e.shiftKey ? 5 : 1 / 30 * 3)) }
-      else if (e.key === 'ArrowRight') { e.preventDefault(); player.seek(useTime.getState().time + (e.shiftKey ? 5 : 1 / 30 * 3)) }
-      else if (e.key.toLowerCase() === 's' && !mod) {
-        const time = useTime.getState().time
-        const seg = st.doc?.segments.find((s) => time > s.start && time < s.end)
-        if (seg) st.split(seg.id, { time })
-      } else if (e.key === 'Enter' && st.selectedId) { e.preventDefault(); st.setEditing(st.selectedId) }
-      else if (e.key === 'Escape') st.select(null)
-    }
-    window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
   }, [])
 
   if (error) return <div className="h-full flex flex-col items-center justify-center gap-4 text-ink-300"><p>{error}</p><Button variant="subtle" onClick={onBack}>Back to projects</Button></div>
@@ -141,8 +131,18 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
     <div className="h-full flex flex-col">
       <TopBar onBack={onBack} onExport={() => setExportOpen(true)} onHistory={() => setHistoryOpen(true)} onKeys={() => setKeysOpen(true)} />
       <div className="flex-1 min-h-0 flex">
-        <aside className="shrink-0 bg-ink-900 min-h-0" style={{ width: left }}><SubtitlePanel /></aside>
-        <Resizer dir="x" onDrag={(d) => setLeft(left + d)} />
+        {popped ? (
+          <aside className="w-11 shrink-0 bg-ink-900 border-r border-ink-750 flex flex-col items-center gap-2 py-3">
+            <button title="Show the captions window" onClick={() => focusPopout(POPOUT_NAME)}
+              className="h-8 w-8 rounded-lg inline-flex items-center justify-center text-accent-300 hover:text-white hover:bg-ink-750"><ExternalLink size={15} /></button>
+            <button title="Dock captions back into this window" onClick={() => setPopped(null)}
+              className="h-8 w-8 rounded-lg inline-flex items-center justify-center text-ink-400 hover:text-white hover:bg-ink-750"><PanelLeftOpen size={15} /></button>
+            <span className="mt-2 text-[11px] text-ink-500 [writing-mode:vertical-rl] rotate-180 select-none">Captions are open in another window</span>
+          </aside>
+        ) : <>
+          <aside className="shrink-0 bg-ink-900 min-h-0" style={{ width: left }}><SubtitlePanel onPopOut={popOut} /></aside>
+          <Resizer dir="x" onDrag={(d) => setLeft(left + d)} />
+        </>}
         <main className="flex-1 min-w-0 flex flex-col min-h-0">
           <div className="flex-1 min-h-0">{project.video ? <VideoPreview /> : <EmptyStage />}</div>
           <Resizer dir="y" onDrag={(d) => setBottom(bottom - d)} />
@@ -151,11 +151,21 @@ export function Editor({ projectId, onBack }: { projectId: string; onBack: () =>
         <Resizer dir="x" onDrag={(d) => setRight(right - d)} />
         <aside className="shrink-0 bg-ink-900 min-h-0" style={{ width: right }}><StylePanel /></aside>
       </div>
+      {popped && (
+        <PopoutWindow name={POPOUT_NAME} title={`Captions · ${project.name} · AI Caption Studio`} placement={popped}
+          onClose={() => setPopped(null)} onKeyDown={handleShortcut}
+          onBlocked={() => toast.error('The browser blocked the new window. Allow pop-ups for this site (icon in the address bar) and try again.')}>
+          <div className="h-full bg-ink-900 text-ink-100">
+            <SubtitlePanel mode="popout" onDock={() => setPopped(null)} />
+          </div>
+          <Toasts />
+        </PopoutWindow>
+      )}
       {exportOpen && <ExportDialog onClose={() => setExportOpen(false)} />}
       {historyOpen && <HistoryDialog onClose={() => setHistoryOpen(false)} />}
       <Modal open={keysOpen} onClose={() => setKeysOpen(false)} title="Keyboard shortcuts" width={420}>
         <div className="space-y-2 text-sm">
-          {[['Play / pause', 'Space'], ['Undo', 'Ctrl + Z'], ['Redo', 'Ctrl + Shift + Z'], ['Save project', 'Ctrl + S'], ['Delete selected caption', 'Delete'],
+          {[['Play / pause', 'Space'], ['Undo', 'Ctrl + Z'], ['Redo', 'Ctrl + Shift + Z'], ['Save project', 'Ctrl + S'], ['Delete selected caption(s)', 'Delete'], ['Select all captions', 'Ctrl + A / double-click a caption on the timeline'], ['Add to selection', 'Ctrl + click'], ['Select a range', 'Shift + click'],
             ['Edit selected caption', 'Enter'], ['Split caption at playhead', 'S'], ['Step back / forward', '← / →'], ['Jump 5 seconds', 'Shift + ← / →'],
             ['Zoom timeline', 'Ctrl + mouse wheel'], ['Deselect', 'Esc']].map(([a, b]) => (
             <div key={a} className="flex justify-between"><span className="text-ink-300">{a}</span><Kbd>{b}</Kbd></div>
@@ -256,4 +266,27 @@ function EmptyStage() {
       )}
     </div>
   )
+}
+
+/** Editor keyboard shortcuts. Works for key events from the main window and from pop-out windows. */
+function handleShortcut(e: KeyboardEvent) {
+  const t = e.target as HTMLElement
+  const typing = t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable
+  const st = useEditor.getState()
+  const mod = e.ctrlKey || e.metaKey
+  if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); saveNow('Manual save').then(() => toast.success('Project saved')).catch(toast.error); return }
+  if (typing) return
+  if (mod && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); st.undo() }
+  else if (mod && ((e.key.toLowerCase() === 'z' && e.shiftKey) || e.key.toLowerCase() === 'y')) { e.preventDefault(); st.redo() }
+  else if (e.key === ' ') { e.preventDefault(); player.toggle() }
+  else if ((e.key === 'Delete' || e.key === 'Backspace') && st.selectedId) { e.preventDefault(); st.deleteSelected() }
+  else if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); st.selectAll() }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); player.seek(useTime.getState().time - (e.shiftKey ? 5 : 1 / 30 * 3)) }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); player.seek(useTime.getState().time + (e.shiftKey ? 5 : 1 / 30 * 3)) }
+  else if (e.key.toLowerCase() === 's' && !mod) {
+    const time = useTime.getState().time
+    const seg = st.doc?.segments.find((s) => time > s.start && time < s.end)
+    if (seg) st.split(seg.id, { time })
+  } else if (e.key === 'Enter' && st.selectedId) { e.preventDefault(); st.setEditing(st.selectedId) }
+  else if (e.key === 'Escape') st.select(null)
 }

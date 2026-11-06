@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { BookA, ClipboardPaste, Copy, Languages, Merge, Plus, RefreshCw, Scissors, Search, Sparkles, Trash2, Wand2 } from 'lucide-react'
+import { BookA, ChevronDown, ChevronRight, ClipboardPaste, Copy, ExternalLink, GripVertical, Languages, PanelLeftOpen, Merge, Plus, RefreshCw, Scissors, Search, Sparkles, Trash2, Wand2 } from 'lucide-react'
 import { player, useEditor, useTime } from '../editor/store'
+import { useOwnerWindow } from '../editor/PopoutWindow'
 import { api, formatTime, parseTime } from '../services/api'
 import { Button, Select, cx, toast } from '../components/ui'
 import { GenerateDialog } from './GenerateDialog'
@@ -14,11 +15,26 @@ const LANG_FALLBACK = [{ id: 'auto', label: 'Auto detect' }, { id: 'en', label: 
 const OUT_FALLBACK = [{ id: 'original', label: 'Original language' }, { id: 'roman_urdu', label: 'Roman Urdu' },
   { id: 'urdu_script', label: 'Urdu script' }, { id: 'english', label: 'English translation' }]
 
-export function SubtitlePanel() {
+const COLLAPSE_KEY = 'captions-setup-collapsed'
+const readCollapsed = () => { try { return localStorage.getItem(COLLAPSE_KEY) === '1' } catch { return false } }
+
+export interface PanelPlacement { left: number; top: number; width?: number; height?: number }
+
+export function SubtitlePanel({ mode = 'docked', onPopOut, onDock }: {
+  mode?: 'docked' | 'popout'
+  /** open the panel in its own window (button click or dragging the grip out of the browser window) */
+  onPopOut?: (where?: PanelPlacement) => void
+  onDock?: () => void
+}) {
+  const win = useOwnerWindow()
+  const [collapsed, setCollapsedState] = useState(readCollapsed)
+  const setCollapsed = (v: boolean) => { setCollapsedState(v); try { localStorage.setItem(COLLAPSE_KEY, v ? '1' : '0') } catch { /* private mode */ } }
+  const [dragOut, setDragOut] = useState<'idle' | 'inside' | 'outside'>('idle')
   const project = useEditor((s) => s.project)
   const segments = useEditor((s) => s.doc?.segments ?? [])
   const settings = useEditor((s) => s.doc?.settings)
   const selectedId = useEditor((s) => s.selectedId)
+  const selectedIds = useEditor((s) => s.selectedIds)
   const jobs = useEditor((s) => s.jobs)
   const [opts, setOpts] = useState<TranscriptionOptions | null>(null)
   const [q, setQ] = useState('')
@@ -49,7 +65,7 @@ export function SubtitlePanel() {
   const langLabel = (id?: string | null) => opts?.languages.find((l) => l.id === id)?.label ?? id
 
   const convert = async (output: 'roman_urdu' | 'urdu_script') => {
-    if (!confirm('Convert all captions from their original Urdu transcription? Manual text edits will be replaced (you can undo).')) return
+    if (!win.confirm('Convert all captions from their original Urdu transcription? Manual text edits will be replaced (you can undo).')) return
     try {
       await saveNow()
       const p = await api.convertScript(project.id, output)
@@ -58,8 +74,63 @@ export function SubtitlePanel() {
     } catch (e) { toast.error(e) }
   }
 
+  // Grab the grip and drag it outside the browser window to open the captions on another screen.
+  const startGripDrag = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.button !== 0 || !onPopOut) return
+    e.preventDefault()
+    const el = e.currentTarget
+    el.setPointerCapture(e.pointerId)
+    setDragOut('inside')
+    const outside = (ev: PointerEvent) => ev.clientX < 0 || ev.clientY < 0 || ev.clientX > win.innerWidth || ev.clientY > win.innerHeight
+    const move = (ev: PointerEvent) => {
+      if (!outside(ev)) { setDragOut('inside'); return }
+      setDragOut('outside')
+    }
+    const up = (ev: PointerEvent) => {
+      el.removeEventListener('pointermove', move)
+      el.removeEventListener('pointerup', up)
+      el.removeEventListener('pointercancel', up)
+      setDragOut('idle')
+      if (outside(ev)) onPopOut({ left: ev.screenX - 60, top: Math.max(0, ev.screenY - 20) })
+    }
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', up)
+    el.addEventListener('pointercancel', up)
+  }
+
   return (
-    <div className="h-full flex flex-col min-h-0">
+    // docked: only the caption list scrolls; pop-out window: the whole panel scrolls (header stays on top)
+    <div className={cx('h-full relative', mode === 'popout' ? 'overflow-y-auto' : 'flex flex-col min-h-0')}>
+      <div className={cx('h-9 shrink-0 flex items-center gap-1 px-1.5 border-b border-ink-750 bg-ink-900', mode === 'popout' && 'sticky top-0 z-20')}>
+        {mode === 'docked' && onPopOut && (
+          <button onPointerDown={startGripDrag} title="Drag outside this window to open the captions on another screen"
+            className={cx('h-7 w-6 rounded-md inline-flex items-center justify-center text-ink-500 hover:text-white hover:bg-ink-750 touch-none',
+              dragOut !== 'idle' ? 'cursor-grabbing text-accent-300' : 'cursor-grab')}>
+            <GripVertical size={15} />
+          </button>
+        )}
+        <button onClick={() => setCollapsed(!collapsed)} aria-expanded={!collapsed}
+          title={collapsed ? 'Show video & caption settings' : 'Hide video & caption settings'}
+          className="flex-1 min-w-0 h-7 rounded-md px-1.5 inline-flex items-center gap-1.5 text-xs text-ink-300 hover:text-white hover:bg-ink-800">
+          {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+          <span className="font-medium">Captions</span>
+          <span className="text-ink-500 truncate">{collapsed ? `· ${video?.originalFilename ?? 'setup hidden'}` : '· setup'}</span>
+        </button>
+        {mode === 'docked' && onPopOut && (
+          <button onClick={() => onPopOut()} title="Open captions in a new window (move it to another screen)"
+            className="h-7 w-7 rounded-md inline-flex items-center justify-center text-ink-400 hover:text-white hover:bg-ink-750"><ExternalLink size={14} /></button>
+        )}
+        {mode === 'popout' && onDock && (
+          <Button size="sm" variant="subtle" onClick={onDock} title="Put the captions back into the editor window"><PanelLeftOpen size={13} /> Dock back</Button>
+        )}
+      </div>
+      {dragOut !== 'idle' && (
+        <div className={cx('absolute inset-x-2 top-11 z-30 rounded-xl border-2 border-dashed px-3 py-4 text-center text-xs pointer-events-none',
+          dragOut === 'outside' ? 'border-accent-400 bg-accent-500/20 text-white' : 'border-ink-600 bg-ink-900/95 text-ink-300')}>
+          {dragOut === 'outside' ? 'Release to open the captions in a new window' : 'Drag outside the browser window to open the captions on another screen'}
+        </div>
+      )}
+      {!collapsed && <>
       <MediaCard />
       <div className="px-4 py-3 space-y-3 border-b border-ink-750">
         <div className="grid grid-cols-2 gap-2">
@@ -100,6 +171,7 @@ export function SubtitlePanel() {
           <div className="text-[11px] text-amber-200/80 bg-amber-500/10 border border-amber-500/20 rounded-lg px-2.5 py-1.5">{project.transcription.notes.join(' ')}</div>
         ) : null}
       </div>
+      </>}
       <div className="px-4 py-2.5 flex items-center gap-2 border-b border-ink-750">
         <div className="relative flex-1">
           <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-500" />
@@ -112,13 +184,13 @@ export function SubtitlePanel() {
         <span>{filtered.length}{q ? ` of ${segments.length}` : ''} captions</span>
         <span>AI captions can contain mistakes. Please review.</span>
       </div>
-      <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto px-2 pb-4 space-y-1">
+      <div ref={listRef} className={cx('px-2 pb-4 space-y-1', mode === 'docked' && 'flex-1 min-h-0 overflow-y-auto')}>
         {!segments.length && (
           <div className="text-center text-xs text-ink-500 px-6 py-10 leading-relaxed">
             {video ? 'No captions yet. Click “Auto generate captions”, paste your own transcript with “Use my own transcript”, or add captions manually with +.' : 'Upload a video to get started.'}
           </div>
         )}
-        {filtered.map((s) => <CaptionItem key={s.id} seg={s} selected={s.id === selectedId} query={q} />)}
+        {filtered.map((s) => <CaptionItem key={s.id} seg={s} selected={s.id === selectedId} inSelection={selectedIds.length > 1 && selectedIds.includes(s.id)} query={q} />)}
       </div>
       {genOpen && opts && <GenerateDialog opts={opts} onClose={() => setGenOpen(false)} />}
       {pasteOpen && opts && <TranscriptDialog opts={opts} onClose={() => setPasteOpen(false)} />}
@@ -152,7 +224,7 @@ function TimeInput({ value, onChange }: { value: number; onChange: (v: number) =
   )
 }
 
-function CaptionItem({ seg, selected, query }: { seg: Segment; selected: boolean; query: string }) {
+function CaptionItem({ seg, selected, inSelection, query }: { seg: Segment; selected: boolean; inSelection: boolean; query: string }) {
   const editing = useEditor((s) => s.editingId === seg.id)
   const active = useTime((s) => s.time >= seg.start && s.time < seg.end)
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -186,10 +258,14 @@ function CaptionItem({ seg, selected, query }: { seg: Segment; selected: boolean
 
   return (
     <div data-seg={seg.id}
-      onClick={() => { ed().select(seg.id); player.seek(seg.start) }}
+      onClick={(e) => {
+        if (e.ctrlKey || e.metaKey) { ed().toggleSelect(seg.id); return }
+        if (e.shiftKey) { ed().selectRange(seg.id); return }
+        ed().select(seg.id); player.seek(seg.start)
+      }}
       onDoubleClick={() => ed().setEditing(seg.id)}
       className={cx('group rounded-xl border px-3 py-2 cursor-pointer transition-colors',
-        selected ? 'bg-accent-500/12 border-accent-500/60 bg-[#1d1838]' : active ? 'bg-ink-800 border-ink-600' : 'border-transparent hover:bg-ink-800/70')}>
+        selected ? 'bg-accent-500/12 border-accent-500/60 bg-[#1d1838]' : inSelection ? 'bg-[#1a1730] border-accent-500/35' : active ? 'bg-ink-800 border-ink-600' : 'border-transparent hover:bg-ink-800/70')}>
       <div className="flex items-center gap-1.5 mb-1">
         {active && <span className="h-1.5 w-1.5 rounded-full bg-accent-400 shadow-[0_0_6px_#9a82ff]" />}
         {selected ? (

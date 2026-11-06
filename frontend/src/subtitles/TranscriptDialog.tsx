@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { ClipboardPaste, FileUp, Info, Wand2 } from 'lucide-react'
 import { useEditor } from '../editor/store'
+import { useOwnerWindow } from '../editor/PopoutWindow'
 import { api } from '../services/api'
 import { Button, Field, Modal, Segmented, Select, toast } from '../components/ui'
 import type { TranscriptionOptions } from '../types'
@@ -37,6 +38,7 @@ export function TranscriptDialog({ opts, onClose }: { opts: TranscriptionOptions
   const [lineMode, setLineMode] = useState<'auto' | 'lines'>('auto')
   const [busy, setBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const win = useOwnerWindow()
 
   const isSubs = text.includes('-->')
   const lines = useMemo(() => readableLines(text), [text])
@@ -57,7 +59,7 @@ export function TranscriptDialog({ opts, onClose }: { opts: TranscriptionOptions
 
   const pasteClipboard = async () => {
     try {
-      const t = await navigator.clipboard.readText()
+      const t = await win.navigator.clipboard.readText()
       if (!t.trim()) { toast.info('The clipboard is empty.'); return }
       setText(t)
       if (t.includes('-->')) setLineMode('lines')

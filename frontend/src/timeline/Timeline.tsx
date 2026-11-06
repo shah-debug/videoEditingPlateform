@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Copy, Merge, Minus, Plus, Scissors, Trash2, Type, AudioLines, Maximize2, MessageSquarePlus } from 'lucide-react'
+import { CheckSquare, Copy, Merge, Minus, Plus, Scissors, Trash2, Type, AudioLines, Maximize2, MessageSquarePlus } from 'lucide-react'
 import { player, useEditor, useTime } from '../editor/store'
 import { formatTime } from '../services/api'
 import { cx } from '../components/ui'
@@ -16,6 +16,7 @@ export function Timeline() {
   const project = useEditor((s) => s.project)
   const segments = useEditor((s) => s.doc?.segments ?? [])
   const selectedId = useEditor((s) => s.selectedId)
+  const selectedIds = useEditor((s) => s.selectedIds)
   const duration = useTime((s) => s.duration) || project?.video?.meta?.duration || 0
   const scrollRef = useRef<HTMLDivElement>(null)
   const [view, setView] = useState({ left: 0, width: 800 })
@@ -96,6 +97,44 @@ export function Timeline() {
     window.addEventListener('pointerup', up)
   }
 
+  // Drag on empty space in the captions row draws a selection box (like CapCut); a plain click deselects and seeks.
+  const [marquee, setMarquee] = useState<{ x0: number; x1: number } | null>(null)
+  const startMarquee = (e: React.PointerEvent) => {
+    if (e.button !== 0 || e.target !== e.currentTarget) return
+    const el = scrollRef.current!
+    const toX = (clientX: number) => clientX - el.getBoundingClientRect().left + el.scrollLeft
+    const x0 = toX(e.clientX)
+    const additive = e.ctrlKey || e.metaKey || e.shiftKey
+    const base = additive ? useEditor.getState().selectedIds : []
+    let dragging = false
+    const move = (ev: PointerEvent) => {
+      const x1 = toX(ev.clientX)
+      if (!dragging && Math.abs(x1 - x0) < 4) return
+      dragging = true
+      // auto-scroll when the box reaches the edge of the visible timeline
+      const r = el.getBoundingClientRect()
+      if (ev.clientX > r.right - 24) el.scrollLeft += 18
+      else if (ev.clientX < r.left + 24) el.scrollLeft -= 18
+      const a = Math.min(x0, x1) / pps, b = Math.max(x0, x1) / pps
+      const segs = useEditor.getState().doc?.segments ?? []
+      const hit = segs.filter((x) => x.end > a && x.start < b).map((x) => x.id)
+      const ids = [...new Set([...base, ...hit])]
+      useEditor.setState({ selectedIds: ids, selectedId: ids.length ? (hit[0] ?? ids[0]) : null, editingId: null })
+      setMarquee({ x0, x1 })
+    }
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      setMarquee(null)
+      if (!dragging) {
+        if (!additive) ed().select(null)
+        seekFromEvent(ev)
+      }
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
   const zoomBy = (k: number) => {
     const el = scrollRef.current
     const center = el ? (el.scrollLeft + el.clientWidth / 2) / pps : 0
@@ -117,7 +156,14 @@ export function Timeline() {
         }}><Scissors size={15} /> Split</TBtn>
         <TBtn title="Merge selected caption with the next one" disabled={!sel} onClick={() => sel && ed().mergeWithNext(sel.id)}><Merge size={15} /> Merge</TBtn>
         <TBtn title="Duplicate selected caption" disabled={!sel} onClick={() => sel && ed().duplicateSegment(sel.id)}><Copy size={15} /></TBtn>
-        <TBtn title="Delete selected caption (Del)" disabled={!sel} onClick={() => sel && ed().deleteSegment(sel.id)}><Trash2 size={15} /></TBtn>
+        <TBtn title={selectedIds.length > 1 ? `Delete ${selectedIds.length} selected captions (Del)` : 'Delete selected caption (Del)'} disabled={!sel} onClick={() => ed().deleteSelected()}><Trash2 size={15} /></TBtn>
+        <TBtn title="Select all captions (Ctrl+A, or double-click a caption)" disabled={!segments.length} onClick={() => ed().selectAll()}><CheckSquare size={15} /></TBtn>
+        {selectedIds.length > 1 && (
+          <span title="Drag any selected caption to move them together · Delete removes them · Esc clears the selection"
+            className="ml-1 shrink-0 whitespace-nowrap text-[11px] text-accent-200 bg-accent-500/15 border border-accent-500/30 rounded-md px-2 py-0.5 tabular-nums">
+            {selectedIds.length === segments.length ? `All ${segments.length} selected` : `${selectedIds.length} selected`}
+          </span>
+        )}
         <div className="flex-1" />
         <PlayheadTime />
         <div className="w-px h-5 bg-ink-700 mx-2" />
@@ -142,8 +188,14 @@ export function Timeline() {
               <WaveCanvas pps={pps} view={view} wave={wave} hasAudio={!!video?.meta?.hasAudio} />
             </div>
             <div className="absolute left-0 right-0" style={{ top: ROW.ruler + ROW.audio, height: ROW.subs }}
-              onPointerDown={(e) => { if (e.target === e.currentTarget) { ed().select(null); startScrub(e) } }}>
-              <SubtitleTrack segments={segments} pps={pps} view={view} duration={duration} selectedId={selectedId} />
+              title="Drag on empty space to select several captions · double-click to select all"
+              onPointerDown={startMarquee}
+              onDoubleClick={(e) => { if (e.target === e.currentTarget) ed().selectAll() }}>
+              <SubtitleTrack segments={segments} pps={pps} view={view} duration={duration} selectedIds={selectedIds} />
+              {marquee && (
+                <div className="absolute top-[2px] bottom-[2px] z-20 rounded-md border border-accent-300 bg-accent-400/20 pointer-events-none"
+                  style={{ left: Math.min(marquee.x0, marquee.x1), width: Math.abs(marquee.x1 - marquee.x0) }} />
+              )}
             </div>
             <Playhead pps={pps} height={ROW.ruler + ROW.audio + ROW.subs} />
           </div>
@@ -260,14 +312,15 @@ function WaveCanvas({ pps, view, wave, hasAudio }: { pps: number; view: { left: 
   )
 }
 
-function SubtitleTrack({ segments, pps, view, duration, selectedId }: { segments: Segment[]; pps: number; view: { left: number; width: number }; duration: number; selectedId: string | null }) {
+function SubtitleTrack({ segments, pps, view, duration, selectedIds }: { segments: Segment[]; pps: number; view: { left: number; width: number }; duration: number; selectedIds: string[] }) {
+  const selected = new Set(selectedIds)
   const time = useTime((s) => Math.floor(s.time * 10) / 10)
   const t0 = view.left / pps - 5, t1 = (view.left + view.width) / pps + 5
   return (
     <>
       {segments.map((s, i) => (s.end < t0 || s.start > t1 ? null : (
         <SubBlock key={s.id} seg={s} prev={segments[i - 1]} next={segments[i + 1]} pps={pps} duration={duration}
-          selected={s.id === selectedId} active={time >= s.start && time < s.end} />
+          selected={selected.has(s.id)} active={time >= s.start && time < s.end} />
       )))}
     </>
   )
@@ -283,8 +336,14 @@ function SubBlock({ seg, prev, next, pps, duration, selected, active }: {
     if (e.button !== 0) return
     e.stopPropagation()
     const st = useEditor.getState()
-    st.select(seg.id)
-    if (mode === 'move' && e.detail === 1) player.seek(Math.max(seg.start, Math.min(seg.end - 0.01, useTime.getState().time >= seg.start && useTime.getState().time < seg.end ? useTime.getState().time : seg.start)))
+    // Ctrl/Cmd+click toggles, Shift+click selects a range (no dragging)
+    if (mode === 'move' && (e.ctrlKey || e.metaKey)) { st.toggleSelect(seg.id); return }
+    if (mode === 'move' && e.shiftKey) { st.selectRange(seg.id); return }
+    // dragging a caption that is part of a multi-selection moves the whole selection
+    const group = mode === 'move' && st.selectedIds.length > 1 && st.selectedIds.includes(seg.id) ? [...st.selectedIds] : null
+    if (group) useEditor.setState({ selectedId: seg.id })
+    else st.select(seg.id)
+    if (mode === 'move' && e.detail === 1 && !group) player.seek(Math.max(seg.start, Math.min(seg.end - 0.01, useTime.getState().time >= seg.start && useTime.getState().time < seg.end ? useTime.getState().time : seg.start)))
     const x0 = e.clientX
     const s0 = seg.start, e0 = seg.end, d0 = e0 - s0
     const lo = prev ? prev.end : 0
@@ -295,7 +354,11 @@ function SubBlock({ seg, prev, next, pps, duration, selected, active }: {
       const dt = (ev.clientX - x0) / pps
       if (!moved && Math.abs(ev.clientX - x0) < 3) return
       moved = true
-      if (mode === 'move') {
+      if (group) {
+        // moveSegments works on the current state, so pass only what is still missing
+        const cur = useEditor.getState().doc?.segments.find((x) => x.id === seg.id)
+        if (cur) useEditor.getState().moveSegments(group, s0 + dt - cur.start, key)
+      } else if (mode === 'move') {
         const ns = Math.min(Math.max(lo, s0 + dt), hi - d0)
         useEditor.getState().setTiming(seg.id, ns, ns + d0, key)
       } else if (mode === 'l') {
@@ -316,7 +379,7 @@ function SubBlock({ seg, prev, next, pps, duration, selected, active }: {
           : active ? 'bg-accent-600/55 border-accent-400/70 text-white' : 'bg-ink-700 border-ink-600 text-ink-200 hover:border-ink-400')}
       style={{ left, width: w }}
       onPointerDown={(e) => onDown(e, 'move')}
-      onDoubleClick={() => useEditor.getState().setEditing(seg.id)}
+      onDoubleClick={(e) => { e.stopPropagation(); useEditor.getState().selectAll() }}
       title={`${formatTime(seg.start)} → ${formatTime(seg.end)}\n${seg.text}`}
     >
       {pps > 60 && seg.words.map((wd, i) => i === 0 ? null : (

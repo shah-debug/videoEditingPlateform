@@ -1,3 +1,4 @@
+import { useOwnerWindow } from '../editor/PopoutWindow'
 import { useEffect, useState, type ReactNode } from 'react'
 import { create } from 'zustand'
 import { ChevronDown, X } from 'lucide-react'
@@ -166,12 +167,13 @@ export function Select({ value, onChange, options, className }: {
 export function Modal({ open, onClose, title, children, width = 520, footer }: {
   open: boolean; onClose: () => void; title: string; children: ReactNode; width?: number; footer?: ReactNode
 }) {
+  const win = useOwnerWindow()
   useEffect(() => {
     if (!open) return
     const h = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
-    window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
-  }, [open, onClose])
+    win.addEventListener('keydown', h)
+    return () => win.removeEventListener('keydown', h)
+  }, [open, onClose, win])
   if (!open) return null
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onMouseDown={onClose}>

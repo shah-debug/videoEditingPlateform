@@ -18,6 +18,7 @@ export function StylePanel() {
   const doc = useEditor((s) => s.doc)
   const selectedId = useEditor((s) => s.selectedId)
   const scope = useEditor((s) => s.styleScope)
+  const multi = useEditor((s) => s.selectedIds.length)
   if (!doc) return null
   const sel = selectedId ? doc.segments.find((s) => s.id === selectedId) ?? null : null
   const style = scope === 'selected' && sel ? effectiveStyle(doc, sel) : doc.style
@@ -38,11 +39,13 @@ export function StylePanel() {
         <Segmented value={sel ? scope : 'all'} onChange={(v) => useEditor.getState().setStyleScope(v)}
           options={[
             { id: 'all', label: 'All captions', title: 'Style changes apply to every caption in the video' },
-            { id: 'selected', label: 'Only this caption', title: 'Style changes apply only to the selected caption' },
+            { id: 'selected', label: multi > 1 ? `Only selected (${multi})` : 'Only this caption', title: 'Style changes apply only to the selected caption(s)' },
           ]} />
         <p className="text-[11px] leading-relaxed text-ink-400">
           {scope === 'selected' && sel
-            ? <>Changes apply <b className="text-ink-200">only to the selected caption</b> (e.g. make one line red or bigger). All other captions keep the main style.</>
+            ? multi > 1
+              ? <>Changes apply <b className="text-ink-200">only to the {multi} selected captions</b>. All other captions keep the main style.</>
+              : <>Changes apply <b className="text-ink-200">only to the selected caption</b> (e.g. make one line red or bigger). All other captions keep the main style.</>
             : scope === 'selected'
               ? <>First click a caption in the left list or on the timeline, then change its style here.</>
               : <>Changes apply to <b className="text-ink-200">every caption</b>. To style just one line differently, select it and choose “Only this caption”.</>}

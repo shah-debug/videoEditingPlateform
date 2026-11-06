@@ -53,11 +53,12 @@ Configuration is optional: copy `.env.example` to `.env`.
 | AI captions | Faster-Whisper with Silero VAD, word-level timestamps, auto/manual language, model choice (tiny → large-v3), caption length (short/social, medium, long). Separate *spoken language* and *caption output*: **Original**, **Roman Urdu**, **Urdu script**, **English translation**. |
 | Your own transcript | **Use my own transcript**: paste (or open a .txt/.srt/.vtt) the exact words in Roman Urdu, Urdu script or any language. The app finds when each word is spoken and builds the captions, either fitted to the screen automatically or one caption per line you typed. Your spelling is kept exactly. Works even where the speech model mishears words. |
 | Roman Urdu | Urdu is transcribed in Urdu script first, then transliterated word by word (no translation). Contextual rules, lexicon, morphology, English code-switch detection, your own spelling dictionary. Switch Urdu script ↔ Roman Urdu at any time without re-transcribing. |
+| Caption panel | The setup area (video, language, generate) collapses with one click. The panel opens in its own window (where the whole panel scrolls, not only the list) (button, or drag its grip out of the browser window) to put it full-width on a second screen; both windows stay in sync, closing it docks the panel back. |
 | Editing | Click to select & seek, double-click/Enter to edit, add, delete, duplicate, split (at text cursor or playhead), merge, exact start/end inputs, search. Word timings are kept when you edit text (unchanged words keep their real audio timing). |
 | Styling | Font family (incl. Urdu Nastaliq/Naskh fonts), custom font upload, size, weight, bold/italic/underline, letter spacing, line height, casing, wrapping, max lines, max width. Text colour + HEX + opacity, per-word colours. Background: none/solid/semi-transparent, colour, opacity, padding, corner radius, width, min height, one box or box per line. Outline colour/thickness. Shadow colour/opacity/blur/offset. Position presets, X/Y, drag on the video with centre snapping, left/centre/right alignment. |
 | Animation | Fade in/out, pop in, slide up/down (all off by default). Word modes: highlight active word, karaoke fill, word-by-word appearance, word-by-word + highlight, all driven by the real word timestamps. |
 | Presets | 10 built-in presets (Classic White, Bold White on Black, Yellow Highlight, Minimal Clean, Social Media, TikTok, YouTube Shorts, Podcast, Cinematic, Word-by-Word). Save/reuse your own. The preset matching the current style is marked selected (✓); one you applied and then changed is marked *Edited*. Presets never touch text or timing. |
-| Timeline | Time ruler, audio waveform, caption blocks. Drag to move, drag edges to resize (no overlaps), click/drag to scrub, Ctrl+wheel zoom, fit, auto-follow playhead, split/merge/delete/add toolbar. Selection is synced with the caption list. |
+| Timeline | Time ruler, audio waveform, caption blocks. Drag a box over empty space in the captions row to select several captions; double-click a caption or empty space (or Ctrl+A) selects all, Ctrl+click adds one, Shift+click selects a range; drag any selected caption to move the whole selection, Delete removes it. Drag to move, drag edges to resize (no overlaps), click/drag to scrub, Ctrl+wheel zoom, fit, auto-follow playhead, split/merge/delete/add toolbar. Selection is synced with the caption list. |
 | Preview | Original video in the chosen aspect ratio (Original, 16:9, 9:16, 1:1, 4:5) with Fit (bars, custom colour) or Fill (crop), zoom, fullscreen. Captions are drawn in their exact export position. |
 | Export | MP4 (H.264, high quality), Original/720p/1080p/4K, original/24/25/30/60 fps, burned-in captions on/off, live progress, cancel, in-app preview of the rendered file, download; the file is also kept in `backend/exports/`. |
 | Projects | Create, rename, delete, reopen; everything auto-saves to SQLite (debounced) and Ctrl+S creates a named restore point. Restore points are also made automatically before regenerating/converting. |
@@ -66,7 +67,7 @@ Configuration is optional: copy `.env.example` to `.env`.
 ### Keyboard shortcuts
 
 `Space` play/pause · `Ctrl+Z` undo · `Ctrl+Shift+Z` / `Ctrl+Y` redo · `Ctrl+S` save · `Delete` delete caption ·
-`Enter` edit caption · `S` split at playhead · `←/→` step · `Shift+←/→` ±5 s · `Ctrl+wheel` timeline zoom · `Esc` deselect
+`Ctrl+A` select all captions · `Enter` edit caption · `S` split at playhead · `←/→` step · `Shift+←/→` ±5 s · `Ctrl+wheel` timeline zoom · `Esc` deselect
 
 ---
 
